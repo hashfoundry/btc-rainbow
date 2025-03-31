@@ -12,6 +12,9 @@ def log_func(x, a, b, c):
     """Logarithmic function for curve fitting."""
     return a * np.log(b + x) + c
 
+#
+# (10^-17.351)*(days*5.836)
+#
 
 def get_data(file_path):
     """
