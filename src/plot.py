@@ -64,6 +64,7 @@ def plot_rainbow(fig, extended_dates, fit):
     """Fill the nine valuation bands between consecutive model edges."""
     edges = fit.band_prices()
 
+    # Baseline for the first `tonexty` fill; never hovered.
     fig.add_trace(
         go.Scatter(
             x=extended_dates,
@@ -76,10 +77,11 @@ def plot_rainbow(fig, extended_dates, fit):
     )
 
     for i, (color, label) in enumerate(BAND_COLORS):
+        lower, upper = edges[i], edges[i + 1]
         fig.add_trace(
             go.Scatter(
                 x=extended_dates,
-                y=edges[i + 1],
+                y=upper,
                 mode="lines",
                 fill="tonexty",
                 # A hairline in the fill colour keeps a 1px seam from showing
@@ -87,7 +89,16 @@ def plot_rainbow(fig, extended_dates, fit):
                 line=dict(width=0.5, color=color),
                 fillcolor=color,
                 name=label,
-                hoverinfo="skip",
+                # Both edges travel with the trace so the tooltip can quote the
+                # band's range. Quoting a single edge would be ambiguous: this
+                # trace sits on the band's upper boundary, which is also the
+                # lower boundary of the band above it.
+                customdata=np.column_stack([lower, upper]),
+                hovertemplate=(
+                    "%{x|%d %b %Y}<br>"
+                    "$%{customdata[0]:,.0f} – $%{customdata[1]:,.0f}"
+                    "<extra>%{fullData.name}</extra>"
+                ),
             )
         )
 
@@ -101,7 +112,9 @@ def plot_fair_value(fig, extended_dates, fit):
             mode="lines",
             line=dict(color=INK, width=1.5, dash="dot"),
             name="Model fair value",
-            hoverinfo="skip",
+            hovertemplate=(
+                "%{x|%d %b %Y}<br>$%{y:,.0f}<extra>%{fullData.name}</extra>"
+            ),
         )
     )
 
@@ -124,11 +137,11 @@ def plot_price(fig, raw_data, extended_dates, fit):
             name="BTC price",
             customdata=customdata,
             hovertemplate=(
-                "<b>%{x|%d %b %Y}</b><br>"
-                "Price: %{y:$,.0f}<br>"
-                "Fair value: %{customdata[0]:$,.0f}<br>"
+                "%{x|%d %b %Y}<br>"
+                "Price: $%{y:,.0f}<br>"
+                "Fair value: $%{customdata[0]:,.0f}<br>"
                 "Price / fair value: %{customdata[1]:.2f}×"
-                "<extra></extra>"
+                "<extra>%{fullData.name}</extra>"
             ),
         )
     )
@@ -193,8 +206,13 @@ def configure_plot(fig, raw_data, fit, extended_dates, months):
         paper_bgcolor=SURFACE,
         autosize=True,
         height=900,
-        hovermode="x",
-        hoverlabel=dict(bgcolor=SURFACE, bordercolor=GRID, font=dict(color=INK)),
+        # "closest" so the tooltip reports the band under the cursor, as the
+        # original chart did; a unified x-hover would list all nine at once.
+        hovermode="closest",
+        # Colours are left to Plotly, which backs each tooltip with its trace
+        # colour and picks black or white text against it. Forcing a white
+        # background here would leave the pale band names barely legible.
+        hoverlabel=dict(font=dict(size=12)),
         title=dict(
             text=(
                 f"<b>Bitcoin Rainbow Chart — {fit.name}</b>"
