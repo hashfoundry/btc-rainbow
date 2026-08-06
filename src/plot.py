@@ -1,251 +1,310 @@
+"""Plotly rendering for any fitted rainbow model."""
+
 from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
-from data import log_func
+from btc_supply import halving_dates
 
-# Define constants
-COLORS_LABELS = {
-    "#c00200": "Maximum bubble territory",
-    "#d64018": "Sell. Seriously, SELL!",
-    "#ed7d31": "FOMO Intensifies",
-    "#f6b45a": "Is this a bubble?",
-    "#feeb84": "HODL!",
-    "#b1d580": "Still cheap",
-    "#63be7b": "Accumulate",
-    "#54989f": "BUY!",
-    "#4472c4": "Fire sale!",
-}
-BAND_WIDTH = 0.3
-NUM_BANDS = 9
-BACKGROUND_COLOR = "#ffffff"
+# Nine ordinal valuation bands, cheapest first. Rendered bottom-up so Plotly's
+# `tonexty` fill stacks them correctly.
+BAND_COLORS = [
+    ("#4472c4", "Fire sale!"),
+    ("#54989f", "BUY!"),
+    ("#63be7b", "Accumulate"),
+    ("#b1d580", "Still cheap"),
+    ("#feeb84", "HODL!"),
+    ("#f6b45a", "Is this a bubble?"),
+    ("#ed7d31", "FOMO intensifies"),
+    ("#d64018", "Sell. Seriously, SELL!"),
+    ("#c00200", "Maximum bubble territory"),
+]
+
+SURFACE = "#ffffff"
+INK = "#1c1c1c"
+INK_MUTED = "#6b6b6b"
+GRID = "#e4e4e4"
+PRICE_LINE = "#101010"
 EXTEND_MONTHS = 9
 
 
-def create_plot(raw_data, popt):
-    """
-    Create a Bitcoin rainbow chart using Plotly.
+def extend_dates(raw_data: pd.DataFrame, months: int = EXTEND_MONTHS) -> pd.Series:
+    """Price-history dates followed by a projection window."""
+    last_date = raw_data["Date"].max()
+    projected = pd.date_range(start=last_date + timedelta(days=1), periods=months * 30)
+    return pd.concat([raw_data["Date"], pd.Series(projected)], ignore_index=True)
+
+
+def create_plot(raw_data, fit, extended_dates, months: int = EXTEND_MONTHS):
+    """Render one model as a rainbow chart.
 
     Args:
-        raw_data (pd.DataFrame): Raw Bitcoin price data.
-        popt (tuple): Parameters for the logarithmic function.
+        raw_data: ``Date``/``Value`` price history.
+        fit: A fitted model from ``models.fit_model``.
+        extended_dates: The grid the model was evaluated on.
+        months: Length of the projection window, for the x-axis range.
 
     Returns:
-        plotly.graph_objects.Figure: The created figure.
+        plotly.graph_objects.Figure
     """
-    # Create figure with secondary y-axis
-    fig = make_subplots()
-    
-    # Set background color
-    fig.update_layout(
-        plot_bgcolor=BACKGROUND_COLOR,
-        paper_bgcolor=BACKGROUND_COLOR,
-        width=2400,
-        height=1200,
-    )
-    
-    # Plot rainbow bands
-    plot_rainbow(fig, raw_data, popt)
-    
-    # Plot price data
-    plot_price(fig, raw_data)
-    
-    # Add halving lines
-    add_halving_lines(fig)
-    
-    # Configure plot appearance
-    configure_plot(fig, raw_data)
-    
-    # Add legend
-    add_legend(fig)
-    
+    fig = go.Figure()
+
+    plot_rainbow(fig, extended_dates, fit)
+    plot_fair_value(fig, extended_dates, fit)
+    plot_price(fig, raw_data, extended_dates, fit)
+    add_halving_lines(fig, extended_dates)
+    configure_plot(fig, raw_data, fit, extended_dates, months)
+
     return fig
 
 
-def extend_dates(raw_data, months=EXTEND_MONTHS):
-    """
-    Extend the date range of the data by a specified number of months.
+def plot_rainbow(fig, extended_dates, fit):
+    """Fill the nine valuation bands between consecutive model edges."""
+    edges = fit.band_prices()
 
-    Args:
-        raw_data (pd.DataFrame): Original data.
-        months (int): Number of months to extend.
-
-    Returns:
-        pd.Series: Extended date range.
-    """
-    last_date = raw_data["Date"].max()
-    extended_dates = pd.date_range(
-        start=last_date + timedelta(days=1), periods=months * 30
+    fig.add_trace(
+        go.Scatter(
+            x=extended_dates,
+            y=edges[0],
+            mode="lines",
+            line=dict(width=0),
+            hoverinfo="skip",
+            showlegend=False,
+        )
     )
-    return pd.concat([raw_data["Date"], pd.Series(extended_dates)])
 
-
-def plot_rainbow(fig, raw_data, popt, num_bands=NUM_BANDS, band_width=BAND_WIDTH):
-    """
-    Plot rainbow bands on the given figure.
-
-    Args:
-        fig (plotly.graph_objects.Figure): Figure to plot on.
-        raw_data (pd.DataFrame): Raw data.
-        popt (tuple): Parameters for the logarithmic function.
-        num_bands (int): Number of bands.
-        band_width (float): Width of each band.
-    """
-    extended_dates = extend_dates(raw_data)
-    extended_xdata = np.arange(1, len(extended_dates) + 1)
-    extended_fitted_ydata = log_func(extended_xdata, *popt)
-
-    for i in range(num_bands):
-        i_decrease = 1.5
-        lower_bound = np.exp(
-            extended_fitted_ydata + (i - i_decrease) * band_width - band_width
-        )
-        upper_bound = np.exp(extended_fitted_ydata + (i - i_decrease) * band_width)
-        color = list(COLORS_LABELS.keys())[::-1][i]
-        label = list(COLORS_LABELS.values())[::-1][i]
-        
+    for i, (color, label) in enumerate(BAND_COLORS):
         fig.add_trace(
             go.Scatter(
                 x=extended_dates,
-                y=upper_bound,
-                fill=None,
-                mode='lines',
-                line=dict(width=0),
-                showlegend=False,
-            )
-        )
-        
-        fig.add_trace(
-            go.Scatter(
-                x=extended_dates,
-                y=lower_bound,
-                fill='tonexty',
-                mode='lines',
-                line=dict(width=0),
+                y=edges[i + 1],
+                mode="lines",
+                fill="tonexty",
+                # A hairline in the fill colour keeps a 1px seam from showing
+                # through between adjacent bands.
+                line=dict(width=0.5, color=color),
                 fillcolor=color,
                 name=label,
+                hoverinfo="skip",
             )
         )
 
 
-def plot_price(fig, raw_data):
-    """
-    Plot Bitcoin price data on the given figure.
+def plot_fair_value(fig, extended_dates, fit):
+    """Dashed centre line: the model's fair value."""
+    fig.add_trace(
+        go.Scatter(
+            x=extended_dates,
+            y=fit.price(),
+            mode="lines",
+            line=dict(color=INK, width=1.5, dash="dot"),
+            name="Model fair value",
+            hoverinfo="skip",
+        )
+    )
 
-    Args:
-        fig (plotly.graph_objects.Figure): Figure to plot on.
-        raw_data (pd.DataFrame): Raw data.
-    """
+
+def plot_price(fig, raw_data, extended_dates, fit):
+    """Bitcoin price, with the hover layer carrying model context."""
+    n_hist = len(raw_data)
+    price = raw_data["Value"].to_numpy(dtype=float)
+    fair = fit.price()[:n_hist]
+    ratio = price / fair
+
+    customdata = np.column_stack([fair, ratio])
+
     fig.add_trace(
         go.Scatter(
             x=raw_data["Date"],
-            y=raw_data["Value"],
-            mode='lines',
-            line=dict(color='black', width=2),
-            name='BTC Price',
+            y=price,
+            mode="lines",
+            line=dict(color=PRICE_LINE, width=2),
+            name="BTC price",
+            customdata=customdata,
+            hovertemplate=(
+                "<b>%{x|%d %b %Y}</b><br>"
+                "Price: %{y:$,.0f}<br>"
+                "Fair value: %{customdata[0]:$,.0f}<br>"
+                "Price / fair value: %{customdata[1]:.2f}×"
+                "<extra></extra>"
+            ),
         )
     )
 
 
-def add_halving_lines(fig):
-    """Add vertical lines for Bitcoin halving events."""
-    halving_dates = [
-        pd.Timestamp("2012-11-28"),  # First halving
-        pd.Timestamp("2016-07-09"),  # Second halving
-        pd.Timestamp("2020-05-11"),  # Third halving
-        pd.Timestamp("2024-04-20"),  # Fourth halving
-    ]
-
-    for halving_date in halving_dates:
+def add_halving_lines(fig, extended_dates):
+    """Vertical markers at each halving inside the plotted range."""
+    last = pd.to_datetime(pd.Series(extended_dates.to_numpy())).max()
+    for halving in halving_dates(last):
+        if halving > last:
+            break
         fig.add_vline(
-            x=halving_date, 
-            line_width=1, 
-            line_dash="solid", 
-            line_color="gray",
-            opacity=0.7
+            x=halving,
+            line_width=1,
+            line_dash="dash",
+            line_color=INK_MUTED,
+            opacity=0.55,
+            annotation_text="halving",
+            annotation_position="top",
+            annotation_font=dict(color=INK_MUTED, size=10),
         )
 
 
-def y_format(y):
-    """Custom formatter for Y-axis labels."""
-    if y < 1:
-        return f"${y:.2f}"
-    elif y < 10:
-        return f"${y:.1f}"
-    elif y < 1_000:
-        return f"${int(y):,}".replace(",", ".")
-    elif y < 1_000_000:
-        return f"${y/1_000:.1f}K".replace(".0K", "K").replace(".", ",")
-    else:
-        return f"${y/1_000_000:.1f}M".replace(".0M", "M").replace(".", ",")
+def configure_plot(fig, raw_data, fit, extended_dates, months):
+    """Axes, titles and the fit-statistics footnote."""
+    edges = fit.band_prices()
+    y_low = max(float(np.nanmin(edges[0])), 1e-3)
+    y_high = float(np.nanmax(edges[-1]))
+    y_high = max(y_high, float(raw_data["Value"].max()) * 1.5)
 
+    dates = pd.to_datetime(pd.Series(extended_dates.to_numpy()))
 
-def configure_plot(fig, raw_data):
-    """
-    Configure the appearance of the plot.
-
-    Args:
-        fig (plotly.graph_objects.Figure): Figure to configure.
-        raw_data (pd.DataFrame): Raw data.
-    """
-    # Set y-axis to log scale
-    fig.update_yaxes(type="log", range=[np.log10(0.01), np.log10(raw_data["Value"].max() * 10)])
-    
-    # Set x-axis range
-    fig.update_xaxes(
-        range=[
-            raw_data["Date"].min(),
-            raw_data["Date"].max() + pd.DateOffset(months=EXTEND_MONTHS),
-        ],
-        tickformat="%Y",  # Format as year only
-        tickfont=dict(color="black"),
-    )
-    
-    # Update y-axis appearance
+    tickvals, ticktext = decade_ticks(y_low, y_high)
     fig.update_yaxes(
-        tickfont=dict(color="black"),
-        tickformat="$,.0f",  # Format as currency
+        type="log",
+        range=[np.log10(y_low), np.log10(y_high)],
+        # One label per decade. A numeric format cannot serve a range this wide:
+        # "$,.0f" renders every sub-dollar decade as "$0".
+        tickmode="array",
+        tickvals=tickvals,
+        ticktext=ticktext,
+        tickfont=dict(color=INK_MUTED, size=12),
+        gridcolor=GRID,
+        zeroline=False,
+        showline=False,
+        title=dict(text="BTC price (log scale)", font=dict(color=INK_MUTED, size=12)),
     )
-    
-    # Update layout
+
+    fig.update_xaxes(
+        range=[raw_data["Date"].min(), dates.max()],
+        dtick="M24",
+        tickformat="%Y",
+        tickfont=dict(color=INK_MUTED, size=12),
+        gridcolor=GRID,
+        zeroline=False,
+        showline=False,
+    )
+
     fig.update_layout(
+        template="plotly_white",
+        plot_bgcolor=SURFACE,
+        paper_bgcolor=SURFACE,
+        autosize=True,
+        height=900,
+        hovermode="x",
+        hoverlabel=dict(bgcolor=SURFACE, bordercolor=GRID, font=dict(color=INK)),
         title=dict(
-            text="Bitcoin Rainbow Chart",
-            font=dict(color="black", size=32),
+            text=(
+                f"<b>Bitcoin Rainbow Chart — {fit.name}</b>"
+                f"<br><span style='font-size:14px;color:{INK_MUTED}'>{fit.formula}</span>"
+            ),
+            font=dict(color=INK, size=24),
             x=0.5,
+            xanchor="center",
+            y=0.96,
         ),
         legend=dict(
             orientation="h",
+            traceorder="reversed",
             yanchor="bottom",
-            y=1.02,
+            y=1.0,
             xanchor="center",
             x=0.5,
-            font=dict(color="black"),
-            bgcolor=BACKGROUND_COLOR,
-            bordercolor=BACKGROUND_COLOR,
+            font=dict(color=INK, size=11),
+            bgcolor=SURFACE,
+            bordercolor=GRID,
+            borderwidth=1,
         ),
-        margin=dict(l=50, r=50, t=100, b=50),
-        xaxis=dict(
-            gridcolor="#cccccc",
-            zerolinecolor="#cccccc",
-        ),
-        yaxis=dict(
-            gridcolor="#cccccc",
-            zerolinecolor="#cccccc",
-        ),
+        # Bottom margin has to clear the x tick labels plus the three-line
+        # footnote annotation that sits below them.
+        margin=dict(l=70, r=40, t=150, b=140),
+        annotations=[
+            dict(
+                text=fit_footnote(raw_data, fit),
+                showarrow=False,
+                xref="paper",
+                yref="paper",
+                x=0,
+                y=-0.075,
+                xanchor="left",
+                yanchor="top",
+                align="left",
+                font=dict(color=INK_MUTED, size=11),
+            )
+        ],
     )
 
 
-def add_legend(fig):
-    """
-    Add legend to the figure.
-    
-    Args:
-        fig (plotly.graph_objects.Figure): Figure to add legend to.
-    """
-    # The legend is automatically created by Plotly based on the trace names
-    # We just need to configure its appearance, which is done in configure_plot
-    pass
+def decade_ticks(low: float, high: float):
+    """One tick per power of ten across the plotted range."""
+    start = int(np.floor(np.log10(low)))
+    stop = int(np.ceil(np.log10(high)))
+    tickvals, ticktext = [], []
+    for exponent in range(start, stop + 1):
+        value = 10.0**exponent
+        if value < low or value > high:
+            continue
+        tickvals.append(value)
+        ticktext.append(price_label(value))
+    return tickvals, ticktext
+
+
+def price_label(value: float) -> str:
+    """Compact currency label: $0.01, $10, $1K, $1M."""
+    if value < 1:
+        return f"${value:.2f}".rstrip("0").rstrip(".") if value >= 0.01 else f"${value:g}"
+    if value < 1_000:
+        return f"${value:,.0f}"
+    if value < 1_000_000:
+        return f"${value / 1_000:g}K"
+    return f"${value / 1_000_000:g}M"
+
+
+def fit_footnote(raw_data, fit) -> str:
+    """Summary of fit quality, fitted parameters and where price sits today."""
+    n_hist = len(raw_data)
+    price = float(raw_data["Value"].iloc[-1])
+    fair = float(fit.price()[n_hist - 1])
+    band = current_band(fit, price, n_hist)
+    bands = "residual quantiles" if fit.band_mode == "quantile" else "±0.5σ steps"
+    return (
+        f"R² = {fit.r2:.4f} (log space)   ·   residual σ = {fit.sigma:.3f}   ·   "
+        f"bands: {bands}   ·   {n_hist:,} daily observations<br>"
+        f"{raw_data['Date'].max().date()}: price {price:,.0f} USD, "
+        f"fair value {fair:,.0f} USD ({price / fair:.2f}×) — {band}<br>"
+        f"fitted: {format_params(fit.params)}"
+    )
+
+
+def format_params(params: dict) -> str:
+    """Render fitted parameters compactly, without scientific-notation noise."""
+    parts = []
+    for key, value in params.items():
+        if isinstance(value, bool):
+            text = "yes" if value else "no"
+        elif isinstance(value, str):
+            text = value
+        elif isinstance(value, (int, float, np.floating)):
+            value = float(value)
+            magnitude = abs(value)
+            if magnitude and (magnitude < 1e-3 or magnitude >= 1e6):
+                text = f"{value:.4g}"
+            else:
+                text = f"{value:,.4f}".rstrip("0").rstrip(".")
+        else:
+            text = str(value)
+        parts.append(f"{key} = {text}")
+    return "   ·   ".join(parts)
+
+
+def current_band(fit, price, n_hist) -> str:
+    """Label of the band today's price falls in."""
+    edges = [float(edge[n_hist - 1]) for edge in fit.band_prices()]
+    if price < edges[0]:
+        return f"below the rainbow (under {BAND_COLORS[0][1]})"
+    for i, (_, label) in enumerate(BAND_COLORS):
+        if price < edges[i + 1]:
+            return label
+    return f"above the rainbow (over {BAND_COLORS[-1][1]})"

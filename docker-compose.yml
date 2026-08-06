@@ -1,0 +1,41 @@
+services:
+  # `docker compose up` -> refreshes the price CSV, refits every model and
+  # writes one chart per model into ./output, then exits.
+  rainbow:
+    build: .
+    image: btc-rainbow:latest
+    container_name: btc-rainbow
+    environment:
+      DATA_FILE: /app/data/bitcoin_data.csv
+      OUTPUT_DIR: /app/output
+      # "all", or a comma-separated subset, e.g. "power_law,lppl,s2f".
+      MODELS: ${MODELS:-all}
+      EXTEND_MONTHS: ${EXTEND_MONTHS:-9}
+      # Tried in order; Binance answers 451 in some regions, hence the fallbacks.
+      EXCHANGES: ${EXCHANGES:-binance,coinbase,kraken,bitstamp}
+      # Set to 1 to plot the CSV as-is with no network access.
+      SKIP_UPDATE: ${SKIP_UPDATE:-0}
+      TZ: UTC
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    restart: "no"
+
+  # Optional: browse the charts at http://localhost:8080
+  # docker compose --profile serve up
+  viewer:
+    # Same build as `rainbow`, so a clean checkout does not try to pull
+    # btc-rainbow:latest from a registry.
+    build: .
+    image: btc-rainbow:latest
+    container_name: btc-rainbow-viewer
+    profiles: ["serve"]
+    depends_on:
+      rainbow:
+        condition: service_completed_successfully
+    entrypoint: ["python", "-m", "http.server", "8080", "--directory", "/app/output"]
+    ports:
+      - "${VIEWER_PORT:-8080}:8080"
+    volumes:
+      - ./output:/app/output:ro
+    restart: "no"
