@@ -175,3 +175,4 @@ cython_debug/
 
 # Generated rainbow charts (rebuilt by `docker compose up`)
 output/
+.DS_Store
