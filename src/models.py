@@ -100,6 +100,12 @@ class ModelSpec:
     formula: str
     fit: Callable[[ModelInput], tuple]  # -> (center over grid, params dict)
     band_mode: str = "sigma"
+    # Free parameters in the centre line, used for the complexity penalty in the
+    # information criteria. Counts every quantity the fit estimates from the
+    # data, including ones found by grid search rather than by an optimiser -
+    # a parameter chosen by scanning costs exactly as much freedom as one solved
+    # for. The residual variance is added separately in metrics.evaluate.
+    n_params: int = 2
 
 
 # --------------------------------------------------------------------------
@@ -261,7 +267,11 @@ def _fit_hyperbolic(inp: ModelInput):
     terminates somewhere interpretable. Read the fitted date as the edge of that
     cap, not as an estimate.
     """
-    t_max = float(inp.t_days.max())
+    # Anchored to the end of the OBSERVED history, never to the plotted grid.
+    # Using inp.t_days here would let the projection window - a display choice -
+    # move the fitted singularity by years and change R², and would fit a
+    # different model during the backtest than the one the chart shows.
+    t_max = float(inp.t_days_hist.max())
 
     best = None
     for b in t_max + np.geomspace(60.0, HYPERBOLIC_MAX_HORIZON_DAYS, 400):
@@ -476,6 +486,7 @@ MODELS = [
         ),
         formula="ln(P) = a · ln(b + i) + c",
         fit=_fit_log_time,
+        n_params=3,
     ),
     ModelSpec(
         key="power_law",
@@ -487,6 +498,7 @@ MODELS = [
         ),
         formula="log₁₀(P) = a · log₁₀(d) + b   ⇔   P = A · d^a",
         fit=_fit_power_law,
+        n_params=2,
     ),
     ModelSpec(
         key="power_law_quantile",
@@ -498,6 +510,7 @@ MODELS = [
         ),
         formula="log₁₀(P) = a · log₁₀(d) + b, bands at residual quantiles",
         fit=_fit_power_law,
+        n_params=2,
         band_mode="quantile",
     ),
     ModelSpec(
@@ -510,6 +523,7 @@ MODELS = [
         ),
         formula="log₁₀(P) = a · log₁₀(d) + b, a = median pairwise slope",
         fit=_fit_power_law_robust,
+        n_params=2,
     ),
     ModelSpec(
         key="log_linear",
@@ -521,6 +535,7 @@ MODELS = [
         ),
         formula="ln(P) = a · d + b   ⇔   P = e^(a·d + b)",
         fit=_fit_log_linear,
+        n_params=2,
     ),
     ModelSpec(
         key="stretched_log",
@@ -531,6 +546,7 @@ MODELS = [
         ),
         formula="ln(P) = a · ln(d)^c + b",
         fit=_fit_stretched_log,
+        n_params=3,
     ),
     ModelSpec(
         key="time_offset_log",
@@ -542,6 +558,7 @@ MODELS = [
         ),
         formula="ln(P) = a · ln(d − t₀) + b",
         fit=_fit_time_offset_log,
+        n_params=3,
     ),
     ModelSpec(
         key="hyperbolic",
@@ -555,6 +572,7 @@ MODELS = [
         ),
         formula="P = a / (b − d)^c",
         fit=_fit_hyperbolic,
+        n_params=3,
     ),
     ModelSpec(
         key="logistic",
@@ -567,6 +585,7 @@ MODELS = [
         ),
         formula="ln(P) = ceiling − S / (1 + e^(k(d − d₀)))",
         fit=_fit_logistic,
+        n_params=4,
     ),
     ModelSpec(
         key="gompertz",
@@ -578,6 +597,7 @@ MODELS = [
         ),
         formula="ln(P) = ceiling − S + S · e^(−B·e^(−C·τ)),  τ = d / 1000",
         fit=_fit_gompertz,
+        n_params=4,
     ),
     ModelSpec(
         key="s2f",
@@ -590,6 +610,7 @@ MODELS = [
         ),
         formula="ln(P) = a · ln(S2F) + b",
         fit=_fit_s2f,
+        n_params=2,
     ),
     ModelSpec(
         key="lppl",
@@ -601,6 +622,7 @@ MODELS = [
         ),
         formula="ln(P) = a·ln(d) + b + (d/d_ref)^(−m) · A·cos(ω·ln(d) − φ)",
         fit=_fit_lppl,
+        n_params=6,
     ),
     ModelSpec(
         key="halving_cycle",
@@ -612,6 +634,7 @@ MODELS = [
         ),
         formula="ln(P) = a·ln(d) + b + Σ(k=1,2) [α_k·cos(2πkφ) + β_k·sin(2πkφ)]",
         fit=_fit_halving_cycle,
+        n_params=6,
     ),
 ]
 

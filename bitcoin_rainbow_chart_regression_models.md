@@ -23,34 +23,131 @@ comparable:
 - **Quantile bands** — band edges sit at empirical residual quantiles (1st to
   99th percentile), so each band holds a known share of history.
 
-Goodness of fit is reported as R² on natural-log price, again so the numbers are
-comparable across models. Time is measured as **days since the genesis block**
-(2009-01-03) unless stated otherwise.
+Time is measured as **days since the genesis block** (2009-01-03) unless stated
+otherwise.
 
-> R² measures how closely a model tracks the past, not how well it predicts. The
-> most flexible curves score highest precisely because they overfit most
-> eagerly.
+## Comparing the models honestly
+
+R² measures how closely a model tracks the past, not how well it predicts, and it
+can never fall when a nested model gains a parameter. Ranking on it alone rewards
+flexibility. Three corrections are applied; the implementation is in
+[`src/metrics.py`](src/metrics.py).
+
+### The autocorrelation problem
+
+These are daily observations of a slow trend, so residuals are enormously
+autocorrelated: lag-1 runs 0.995–0.999 and Durbin–Watson sits at 0.002–0.011
+instead of 2. Price stays on one side of the fitted curve for months at a time.
+
+Textbook AIC/BIC assume independent observations. With n = 5,834 the complexity
+penalty (2k, or ln(n)·k ≈ 8.7k) is swamped by a likelihood built from thousands
+of points that are nothing like independent. Measured directly: naive ΔAIC ranks
+the models in **exactly** the R² order with no inversions, and puts the
+6-parameter halving-cycle model 2,367 units ahead of the 2-parameter power law —
+against a penalty difference of 8. That is not a preference, it is an artefact.
+
+**Adjusted R² does not fix it either.** The largest correction across all
+thirteen models is 8.3 × 10⁻⁵, against an R² spread of 0.134 — three orders of
+magnitude too small to change any ranking. It is reported anyway, because it is
+the usual suggested remedy and watching it do nothing is informative.
+
+### The correction: effective sample size
+
+The likelihood is discounted to the number of *independent* observations the
+residuals are worth, from the integrated autocorrelation time. That is about
+**22, not 5,834** — residuals decorrelate over roughly 260 days, so sixteen years
+of daily data carry about two dozen independent looks at the trend.
+
+This single change reverses the answer. The halving-cycle model keeps the best R²
+but drops to sixth on ΔAICc; the two-parameter power law comes first.
+
+One implementation detail matters: n_eff is taken from **one fixed reference fit**
+and applied to every model. Deriving it per-model is circular and actively
+perverse — a model that fits badly leaves more autocorrelated residuals, which
+shrinks its own n_eff and therefore its own penalty. Scored that way, the log-linear
+and hyperbolic models (the two worst) rank first.
+
+The conclusion is not an artefact of where the autocorrelation sum is truncated.
+Varying the cutoff from 0.01 to 0.2 moves n_eff only between 22.4 and 23.2 and
+leaves the ranking untouched; even at an implausibly loose 0.4 (n_eff = 28.7) the
+power law still comes first and the halving-cycle model still does not.
+
+**It is, however, sensitive to the choice of estimator, and that should be
+stated plainly.** ΔAICc between the halving-cycle model and the power law crosses
+zero at n_eff ≈ 30. Estimators that stay close to the integrated autocorrelation
+time agree with the shipped value — Geyer initial-positive sequence 22.0,
+first-zero crossing 22.4, batch means at 500 days 21.9 — and all sit well below
+the crossover. But an AR(1) rule gives 11 (which would penalise complexity even
+harder), while Sokal automatic windowing gives 50 and short-block batch means
+give 40+, both of which would put the halving-cycle model first.
+
+So the finding "the power law's simplicity wins" is robust across the
+τ-estimators closest to what is being measured, but it is not a knife-edge-free
+result. The defensible claim is the weaker one: once the penalty is charged
+against anything like the real information content, the 6-parameter models lose
+their apparently overwhelming margin and land in a statistical tie — not that
+they are decisively beaten.
+
+### Out-of-sample walk-forward
+
+The only test immune to the parameter-count objection. An expanding window (these
+models all claim to describe history since genesis, so discarding early data
+would misrepresent them); origins every 182 days from 2015; each model refitted
+on data up to the origin, then scored on the price 365 days later.
 
 ## Model reference
 
-Fit statistics below were measured on daily closes through 2026-08-06
-(5,834 observations). They shift as new data arrives.
+Measured on daily closes through 2026-08-06 (5,834 observations, n_eff ≈ 22.4),
+sorted by ΔAICc. These shift as new data arrives.
 
-| Key | Model | R² (log) | σ |
-|---|---|---|---|
-| `halving_cycle` | Halving-Cycle Regression | 0.9732 | 0.566 |
-| `lppl` | Log-Periodic Power Law | 0.9646 | 0.651 |
-| `log_time` | Logarithmic Regression (original) | 0.9612 | 0.681 |
-| `time_offset_log` | Time-Adjusted Logarithmic Regression | 0.9612 | 0.681 |
-| `stretched_log` | Modified Power Law (Stretched Log) | 0.9609 | 0.684 |
-| `power_law` | Power Law Corridor | 0.9598 | 0.694 |
-| `power_law_quantile` | Power Law – Quantile Corridor | 0.9598 | 0.694 |
-| `gompertz` | Gompertz Growth | 0.9559 | 0.727 |
-| `logistic` | Logistic Growth (S-Curve) | 0.9551 | 0.733 |
-| `power_law_robust` | Power Law – Robust (Theil–Sen) | 0.9486 | 0.695 |
-| `s2f` | Stock-to-Flow | 0.9321 | 0.901 |
-| `log_linear` | Log-Linear (Exponential Trend) | 0.8697 | 1.249 |
-| `hyperbolic` | Hyperbolic (Finite-Time Singularity) | 0.8399 | 1.384 |
+| Key | Model | k | R² | σ | ΔAICc | ΔBIC | OOS RMSE |
+|---|---|---|---|---|---|---|---|
+| `power_law` | Power Law Corridor | 2 | 0.9598 | 0.694 | **0.00** | 0.00 | 0.718 |
+| `power_law_quantile` | Power Law – Quantile Corridor | 2 | 0.9598 | 0.694 | **0.00** | 0.00 | 0.718 |
+| `time_offset_log` | Time-Adjusted Logarithmic Regression | 3 | 0.9612 | 0.681 | 2.19 | 2.31 | 0.817 |
+| `log_time` | Logarithmic Regression (original) | 3 | 0.9612 | 0.681 | 2.19 | 2.31 | 0.817 |
+| `stretched_log` | Modified Power Law (Stretched Log) | 3 | 0.9609 | 0.684 | 2.33 | 2.45 | 0.763 |
+| `halving_cycle` | Halving-Cycle Regression | 6 | **0.9732** | 0.566 | 5.33 | 3.31 | 0.644 |
+| `power_law_robust` | Power Law – Robust (Theil–Sen) | 2 | 0.9486 | 0.695 | 5.51 | 5.51 | 0.618 |
+| `gompertz` | Gompertz Growth | 4 | 0.9559 | 0.727 | 8.44 | 8.31 | 0.973 |
+| `logistic` | Logistic Growth (S-Curve) | 4 | 0.9551 | 0.733 | 8.83 | 8.70 | 0.973 |
+| `lppl` | Log-Periodic Power Law | 6 | 0.9646 | 0.651 | 11.60 | 9.59 | **0.587** |
+| `s2f` | Stock-to-Flow | 2 | 0.9321 | 0.901 | 11.74 | 11.74 | 1.048 |
+| `log_linear` | Log-Linear (Exponential Trend) | 2 | 0.8697 | 1.249 | 26.37 | 26.37 | 1.910 |
+| `hyperbolic` | Hyperbolic (Finite-Time Singularity) | 3 | 0.8393 | 1.387 | 34.06 | 34.18 | 2.246 |
+
+Three things are worth reading off this table.
+
+**The complexity penalty bites.** `halving_cycle` and `lppl` have the two best
+R² scores and rank 6th and 10th on ΔAICc. Their extra parameters do not pay for
+themselves.
+
+**But "more parameters ⇒ better R²" is a tendency, not a law.** Spearman(k, R²)
+is only +0.55 (p = 0.051), and in 15 of 60 model pairs the model with *more*
+parameters scored *worse*. These models are mostly not nested, so a larger k can
+simply buy a worse functional form — `logistic` and `gompertz` (k = 4) both lose
+to the k = 2 power law, and `hyperbolic` (k = 3) loses to `log_linear` (k = 2).
+
+**The two rankings disagree, and that is the interesting part.** The models AICc
+penalises hardest are the ones that forecast best: `lppl` has the worst ΔAICc of
+the credible models and the *best* out-of-sample RMSE. Meanwhile
+`power_law_robust` has a mediocre in-sample R² (0.9486, third-worst) and the
+second-best out-of-sample error — robust estimation gives up in-sample fit
+precisely to generalise better.
+
+Treat the out-of-sample column as indicative rather than a verdict: **9 of 12
+models are statistically indistinguishable from the top one** under a moving-block
+bootstrap, and the ordering moves with the evaluation window. Starting the
+backtest in 2013 instead of 2015 drops `halving_cycle` out of the top five;
+starting in 2017 puts it first. Only `s2f`, `log_linear` and `hyperbolic` are
+separated from the leader with any confidence.
+
+The bootstrap interval is Bonferroni-widened across the comparisons. Each model
+is measured against whichever one happened to win on the same 22 windows, so
+uncorrected intervals suffer the winner's curse: under a null where every model
+is equally good, the uncorrected procedure flags roughly 44% of thirteen models
+as "significantly worse than the best". The correction errs toward declaring
+ties, which is the right direction for a table this small.
 
 ---
 
@@ -152,6 +249,15 @@ beside `log_linear`'s 0.87). The scan is therefore capped at 30 years past the
 last observation. Read the reported singularity date as the edge of that cap, not
 as an estimate. The model is properly used on individual blow-off segments, where
 growth genuinely is super-exponential.
+
+The scan is anchored to the end of the **observed history**, not to the plotted
+grid. Anchoring it to the grid — as an earlier version did — let the projection
+window, a pure display choice, move the fitted singularity by five years and
+change R² in the third decimal, and made the backtest fit a different model than
+the chart showed.
+
+It is also the worst forecaster in the set by a wide margin: out-of-sample RMSE
+2.25 in log space, with a skill score of −4.07 against a random walk.
 
 ### 9. Logistic Growth (S-Curve) — `logistic`
 
@@ -265,7 +371,36 @@ Every model here is fitted to history and assumes the future resembles it. They
 disagree with each other by a factor of two on present fair value, and they
 diverge far more on projection. That spread is the honest signal: use the
 rainbow as a gauge of where price sits relative to its own past, not as a price
-prediction. None of this is financial advice.
+prediction.
+
+Specific caveats on the statistics:
+
+- **The effective sample size is an estimate, not a constant of nature.** It is
+  robust to the truncation cutoff but not to the choice of τ-estimator, and the
+  ΔAICc winner changes above n_eff ≈ 30 (see above). It is used to make the
+  complexity penalty roughly the right order of magnitude, not to support
+  fine-grained claims — which is why no Akaike weights or p-values are derived
+  from it.
+- **Five fits terminate on a bound**, so the nominal `k` overstates what the data
+  actually identified: `stretched_log` (c at its lower bound), `logistic` and
+  `gompertz` (log-span at 60), `lppl` (damping at 0) and `hyperbolic` (horizon
+  cap). Each bound exists for a documented reason, but a parameter pinned by a
+  constraint is not a parameter the data estimated.
+- **The out-of-sample ordering is unstable.** 22 overlapping forecast windows is
+  not many, most models are statistically indistinguishable from the leader, and
+  the ranking shifts with the evaluation period.
+- **Small residual leakage in the backtest.** `btc_supply.HEIGHT_ANCHORS`
+  hard-codes the four observed halving dates, so a refit at a 2016 origin
+  technically "knows" when the 2020 and 2024 halvings landed. This affects only
+  `s2f` and `halving_cycle`, and only through the placement of future halvings —
+  never through price. Halving dates are derivable from the block schedule years
+  in advance, so the bias is days of timing, not knowledge of the outcome.
+- **AIC assumes a Gaussian likelihood**, which sits awkwardly with
+  `power_law_robust`: Theil–Sen does not minimise squared error, so it is
+  scored by a criterion it was not built to win. Its poor ΔAICc and strong
+  out-of-sample result should be read in that light.
+
+None of this is financial advice.
 
 ## Sources
 

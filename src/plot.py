@@ -37,7 +37,14 @@ def extend_dates(raw_data: pd.DataFrame, months: int = EXTEND_MONTHS) -> pd.Seri
     return pd.concat([raw_data["Date"], pd.Series(projected)], ignore_index=True)
 
 
-def create_plot(raw_data, fit, extended_dates, months: int = EXTEND_MONTHS):
+def create_plot(
+    raw_data,
+    fit,
+    extended_dates,
+    months: int = EXTEND_MONTHS,
+    stats=None,
+    backtest=None,
+):
     """Render one model as a rainbow chart.
 
     Args:
@@ -45,6 +52,8 @@ def create_plot(raw_data, fit, extended_dates, months: int = EXTEND_MONTHS):
         fit: A fitted model from ``models.fit_model``.
         extended_dates: The grid the model was evaluated on.
         months: Length of the projection window, for the x-axis range.
+        stats: Optional ``metrics.Metrics`` for the footnote.
+        backtest: Optional ``metrics.Backtest`` for the footnote.
 
     Returns:
         plotly.graph_objects.Figure
@@ -55,7 +64,7 @@ def create_plot(raw_data, fit, extended_dates, months: int = EXTEND_MONTHS):
     plot_fair_value(fig, extended_dates, fit)
     plot_price(fig, raw_data, extended_dates, fit)
     add_halving_lines(fig, extended_dates)
-    configure_plot(fig, raw_data, fit, extended_dates, months)
+    configure_plot(fig, raw_data, fit, extended_dates, months, stats, backtest)
 
     return fig
 
@@ -165,7 +174,7 @@ def add_halving_lines(fig, extended_dates):
         )
 
 
-def configure_plot(fig, raw_data, fit, extended_dates, months):
+def configure_plot(fig, raw_data, fit, extended_dates, months, stats=None, backtest=None):
     """Axes, titles and the fit-statistics footnote."""
     edges = fit.band_prices()
     y_low = max(float(np.nanmin(edges[0])), 1e-3)
@@ -205,7 +214,7 @@ def configure_plot(fig, raw_data, fit, extended_dates, months):
         plot_bgcolor=SURFACE,
         paper_bgcolor=SURFACE,
         autosize=True,
-        height=900,
+        height=1010,
         # "closest" so the tooltip reports the band under the cursor, as the
         # original chart did; a unified x-hover would list all nine at once.
         hovermode="closest",
@@ -235,12 +244,13 @@ def configure_plot(fig, raw_data, fit, extended_dates, months):
             bordercolor=GRID,
             borderwidth=1,
         ),
-        # Bottom margin has to clear the x tick labels plus the three-line
-        # footnote annotation that sits below them.
-        margin=dict(l=70, r=40, t=150, b=140),
+        # Bottom margin has to clear the x tick labels plus the footnote
+        # annotation below them, which runs to seven lines once the
+        # model-comparison statistics are included.
+        margin=dict(l=70, r=40, t=150, b=215),
         annotations=[
             dict(
-                text=fit_footnote(raw_data, fit),
+                text=fit_footnote(raw_data, fit, stats, backtest),
                 showarrow=False,
                 xref="paper",
                 yref="paper",
@@ -280,20 +290,55 @@ def price_label(value: float) -> str:
     return f"${value / 1_000_000:g}M"
 
 
-def fit_footnote(raw_data, fit) -> str:
+def fit_footnote(raw_data, fit, stats=None, backtest=None) -> str:
     """Summary of fit quality, fitted parameters and where price sits today."""
     n_hist = len(raw_data)
     price = float(raw_data["Value"].iloc[-1])
     fair = float(fit.price()[n_hist - 1])
     band = current_band(fit, price, n_hist)
     bands = "residual quantiles" if fit.band_mode == "quantile" else "±0.5σ steps"
-    return (
-        f"R² = {fit.r2:.4f} (log space)   ·   residual σ = {fit.sigma:.3f}   ·   "
-        f"bands: {bands}   ·   {n_hist:,} daily observations<br>"
-        f"{raw_data['Date'].max().date()}: price {price:,.0f} USD, "
-        f"fair value {fair:,.0f} USD ({price / fair:.2f}×) — {band}<br>"
-        f"fitted: {format_params(fit.params)}"
-    )
+
+    lines = [
+        (
+            f"R² = {fit.r2:.4f} (log space)   ·   residual σ = {fit.sigma:.3f}   ·   "
+            f"bands: {bands}   ·   {n_hist:,} daily observations"
+        ),
+        (
+            f"{raw_data['Date'].max().date()}: price {price:,.0f} USD, "
+            f"fair value {fair:,.0f} USD ({price / fair:.2f}×) — {band}"
+        ),
+        f"fitted: {format_params(fit.params)}",
+    ]
+
+    if stats is not None:
+        lines.append(
+            f"<b>complexity</b>: {stats.n_params} parameters   ·   adjusted R² = "
+            f"{stats.adj_r2:.4f}   ·   ΔAICc = {stats.d_aicc:.2f}   ·   ΔBIC = "
+            f"{stats.d_bic:.2f}   (charged against n_eff = {stats.n_eff:.1f}, not "
+            f"{stats.n:,} — see index.html)"
+        )
+        lines.append(
+            f"<b>residuals</b>: Durbin–Watson = {stats.durbin_watson:.3f}   ·   ρ₁ = "
+            f"{stats.rho1:.4f}   ·   skew = {stats.skew:+.2f}   ·   excess kurtosis = "
+            f"{stats.excess_kurtosis:+.2f}   ·   median abs. error = {stats.medape:.1f}% of price"
+        )
+        lines.append(
+            f"<b>bands</b>: {stats.coverage:.1f}% of history inside the rainbow   ·   "
+            f"calibration error = {stats.calibration_error:.1f}pp per band"
+        )
+
+    if backtest is not None:
+        tie = " — statistically tied with the best model" if backtest.tied_with_best else ""
+        lines.append(
+            f"<b>out-of-sample</b> ({backtest.origins} origins × "
+            f"{backtest.horizon_days}-day horizon, expanding window): RMSE(log) = "
+            f"{backtest.rmse_log:.3f}   ·   bias = {backtest.bias_log:+.3f}   ·   "
+            f"median abs. error = {backtest.medape:.1f}%   ·   "
+            f"{backtest.coverage:.0f}% landed inside the bands   ·   "
+            f"skill vs random walk = {backtest.skill:+.3f}{tie}"
+        )
+
+    return "<br>".join(lines)
 
 
 def format_params(params: dict) -> str:
