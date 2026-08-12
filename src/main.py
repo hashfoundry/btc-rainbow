@@ -15,6 +15,7 @@ import numpy as np
 import metrics as metrics_mod
 import models
 import plot
+import report
 from data import DEFAULT_EXCHANGES, get_data
 from models import build_input, fit_model, resolve_models
 from plot import BAND_COLORS, current_band, extend_dates
@@ -111,15 +112,14 @@ def build_charts(
             raw_data, fit, extended, months=extend_months,
             stats=result["metrics"], backtest=result["backtest"],
         )
-        target = out / f"{spec.key}.html"
-        fig.write_html(target, full_html=True, include_plotlyjs="cdn", config=PLOTLY_CONFIG)
+        # The figure is embedded as a fragment rather than written straight out,
+        # so the comparison tables can sit underneath it on the same page.
+        plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", config=PLOTLY_CONFIG)
+        page = report.chart_page(plot_div, spec, results, n_eff, len(raw_data))
+
+        (out / f"{spec.key}.html").write_text(page, encoding="utf-8")
         if spec.key == LEGACY_CHART_MODEL:
-            fig.write_html(
-                out / LEGACY_CHART_NAME,
-                full_html=True,
-                include_plotlyjs="cdn",
-                config=PLOTLY_CONFIG,
-            )
+            (out / LEGACY_CHART_NAME).write_text(page, encoding="utf-8")
 
     print_report(raw_data, results, n_eff)
 
@@ -427,6 +427,8 @@ def render_index(
         ranking_para=ranking_para,
         oos_note=html.escape(oos_note),
         rows="\n".join(rows),
+        css=report.CSS,
+        stats_tables=report.stats_section(results, n_eff, n_hist),
     )
 
 
@@ -443,66 +445,7 @@ INDEX_TEMPLATE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bitcoin Rainbow Charts — Model Comparison</title>
-<style>
-  :root {{
-    --surface: #ffffff; --raised: #f7f7f8; --ink: #16181d; --muted: #6b7280;
-    --line: #e5e7eb; --accent: #b45309;
-  }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{
-      --surface: #101216; --raised: #181b21; --ink: #eceef2; --muted: #9aa1ad;
-      --line: #2a2e37; --accent: #f0b429;
-    }}
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    margin: 0; padding: 40px 24px 80px; background: var(--surface); color: var(--ink);
-    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }}
-  main {{ max-width: 1080px; margin: 0 auto; }}
-  h1 {{ font-size: 30px; margin: 0 0 6px; letter-spacing: -0.02em; }}
-  .sub {{ color: var(--muted); margin: 0 0 28px; }}
-  .stats {{ display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 32px; }}
-  .stat {{
-    flex: 1 1 160px; background: var(--raised); border: 1px solid var(--line);
-    border-radius: 10px; padding: 14px 16px;
-  }}
-  .stat .k {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }}
-  .stat .v {{ font-size: 22px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }}
-  .stat .note {{ color: var(--muted); font-size: 12px; margin-top: 2px; font-variant-numeric: tabular-nums; }}
-  .callout {{
-    border: 1px solid var(--line); border-left: 3px solid var(--accent);
-    background: var(--raised); border-radius: 8px; padding: 14px 18px; margin: 0 0 28px;
-    font-size: 14px; color: var(--muted);
-  }}
-  .callout strong {{ color: var(--ink); }}
-  .sub {{ display: block; color: var(--muted); font-size: 12px; margin-top: 3px;
-    font-variant-numeric: tabular-nums; font-weight: 400; }}
-  .wrap {{ overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }}
-  table {{ border-collapse: collapse; width: 100%; min-width: 760px; }}
-  th, td {{ padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }}
-  th {{
-    background: var(--raised); color: var(--muted); font-size: 12px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: .06em; position: sticky; top: 0;
-  }}
-  tr:last-child td {{ border-bottom: none; }}
-  .num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
-  a.name {{ color: var(--ink); font-weight: 650; text-decoration: none; border-bottom: 2px solid var(--accent); }}
-  a.name:hover {{ color: var(--accent); }}
-  .name {{ display: inline-block; }}
-  .formula {{ display: block; color: var(--muted); font-size: 12.5px; margin-top: 5px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
-  .desc {{ display: block; color: var(--muted); font-size: 13px; margin-top: 6px; max-width: 62ch; }}
-  .ratio {{ display: block; font-weight: 600; }}
-  .band {{ display: flex; align-items: center; gap: 6px; justify-content: flex-end;
-    color: var(--muted); font-size: 12.5px; margin-top: 5px; }}
-  .band i {{ width: 10px; height: 10px; border-radius: 2px; display: inline-block; }}
-  .failed td {{ color: var(--muted); }}
-  .error {{ font-size: 13px; }}
-  footer {{ color: var(--muted); font-size: 13px; margin-top: 28px; max-width: 82ch; }}
-  footer p {{ margin: 0 0 10px; }}
-  footer strong {{ color: var(--ink); }}
-</style>
+<style>{css}</style>
 </head>
 <body>
 <main>
@@ -544,6 +487,8 @@ INDEX_TEMPLATE = """<!doctype html>
     </tbody>
   </table>
   </div>
+
+{stats_tables}
 
   <footer>
     <p>Fitted on daily closes from {first_date} to {as_of}. R², σ and the information

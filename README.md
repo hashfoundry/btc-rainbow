@@ -45,8 +45,13 @@ The mathematics, fitting method and failure modes of each are documented in
 ## How the models are compared
 
 Ranking by R² would be misleading, because R² can never fall when a nested model
-gains a parameter. Every run therefore prints three tables and puts the same
-statistics on each chart and in `index.html`.
+gains a parameter. Every run therefore prints three tables to stdout and renders
+the same three as HTML **below every chart** and on `index.html`.
+
+Each table covers **all models**, with the chart's own model highlighted, so any
+single chart can be read against its alternatives instead of on its own. The
+footnote under the plot keeps only what is specific to that fit — its R², σ,
+today's price against fair value, and the fitted parameter values.
 
 **Fit and complexity.** R², adjusted R², σ, median absolute % error, and ΔAIC /
 ΔAICc / ΔBIC. The information criteria are charged against an **effective sample
@@ -141,6 +146,7 @@ python src/main.py --models power_law,lppl --no-update --extend-months 24
 | [src/main.py](src/main.py) | CLI entry point; builds every chart and the index page |
 | [src/models.py](src/models.py) | Model registry, fitting, and rainbow band construction |
 | [src/metrics.py](src/metrics.py) | Fit statistics, information criteria, walk-forward backtest |
+| [src/report.py](src/report.py) | Shared stylesheet, comparison tables, chart and index page shells |
 | [src/data.py](src/data.py) | CSV loading and exchange top-up |
 | [src/plot.py](src/plot.py) | Plotly rendering, shared by every model |
 | [src/btc_supply.py](src/btc_supply.py) | Issuance schedule and stock-to-flow |

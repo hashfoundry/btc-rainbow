@@ -214,7 +214,7 @@ def configure_plot(fig, raw_data, fit, extended_dates, months, stats=None, backt
         plot_bgcolor=SURFACE,
         paper_bgcolor=SURFACE,
         autosize=True,
-        height=1010,
+        height=880,
         # "closest" so the tooltip reports the band under the cursor, as the
         # original chart did; a unified x-hover would list all nine at once.
         hovermode="closest",
@@ -244,10 +244,9 @@ def configure_plot(fig, raw_data, fit, extended_dates, months, stats=None, backt
             bordercolor=GRID,
             borderwidth=1,
         ),
-        # Bottom margin has to clear the x tick labels plus the footnote
-        # annotation below them, which runs to seven lines once the
-        # model-comparison statistics are included.
-        margin=dict(l=70, r=40, t=150, b=215),
+        # Bottom margin clears the x tick labels plus the four-line footnote
+        # annotation below them.
+        margin=dict(l=70, r=40, t=150, b=150),
         annotations=[
             dict(
                 text=fit_footnote(raw_data, fit, stats, backtest),
@@ -310,32 +309,16 @@ def fit_footnote(raw_data, fit, stats=None, backtest=None) -> str:
         f"fitted: {format_params(fit.params)}",
     ]
 
+    # Only what is specific to this fitted curve. Every comparative statistic -
+    # the information criteria, residual diagnostics, band calibration and the
+    # backtest - lives in the tables rendered directly below the chart, for all
+    # models at once, so repeating them here would just be noise.
     if stats is not None:
         lines.append(
-            f"<b>complexity</b>: {stats.n_params} parameters   ·   adjusted R² = "
-            f"{stats.adj_r2:.4f}   ·   ΔAICc = {stats.d_aicc:.2f}   ·   ΔBIC = "
-            f"{stats.d_bic:.2f}   (charged against n_eff = {stats.n_eff:.1f}, not "
-            f"{stats.n:,} — see index.html)"
-        )
-        lines.append(
-            f"<b>residuals</b>: Durbin–Watson = {stats.durbin_watson:.3f}   ·   ρ₁ = "
-            f"{stats.rho1:.4f}   ·   skew = {stats.skew:+.2f}   ·   excess kurtosis = "
-            f"{stats.excess_kurtosis:+.2f}   ·   median abs. error = {stats.medape:.1f}% of price"
-        )
-        lines.append(
-            f"<b>bands</b>: {stats.coverage:.1f}% of history inside the rainbow   ·   "
-            f"calibration error = {stats.calibration_error:.1f}pp per band"
-        )
-
-    if backtest is not None:
-        tie = " — statistically tied with the best model" if backtest.tied_with_best else ""
-        lines.append(
-            f"<b>out-of-sample</b> ({backtest.origins} origins × "
-            f"{backtest.horizon_days}-day horizon, expanding window): RMSE(log) = "
-            f"{backtest.rmse_log:.3f}   ·   bias = {backtest.bias_log:+.3f}   ·   "
-            f"median abs. error = {backtest.medape:.1f}%   ·   "
-            f"{backtest.coverage:.0f}% landed inside the bands   ·   "
-            f"skill vs random walk = {backtest.skill:+.3f}{tie}"
+            f"{stats.n_params} free parameters   ·   ΔAICc = {stats.d_aicc:.2f} vs the best "
+            f"model   ·   out-of-sample RMSE(log) = "
+            + (f"{backtest.rmse_log:.3f}" if backtest is not None else "not run")
+            + "   —   full comparison below"
         )
 
     return "<br>".join(lines)
