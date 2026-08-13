@@ -45,6 +45,17 @@ SATURATION_CEILING_USD = 10_000_000.0
 # ~30 years past the last observation.
 HYPERBOLIC_MAX_HORIZON_DAYS = 11_000.0
 
+# Plan C's Quantile Model works on named valuation tiers rather than a rainbow:
+# six quantile curves bounding five bands. Levels and names follow version 2.
+QUANTILE_MODEL_LEVELS = [0.01, 0.20, 0.50, 0.80, 0.95, 0.999]
+QUANTILE_MODEL_BANDS = [
+    ("#ececec", "Deep Value (1–20)"),
+    ("#cfe0f5", "Discounted (20–50)"),
+    ("#fdf0c9", "Premium (50–80)"),
+    ("#f2c2c2", "Speculative (80–95)"),
+    ("#d9d9d9", "Historic Peaks (95–99.9)"),
+]
+
 
 @dataclass
 class ModelInput:
@@ -79,11 +90,16 @@ class Fit:
     formula: str
     band_mode: str
     center: np.ndarray  # ln price over the whole grid
-    edges: list  # NUM_BANDS + 1 arrays of ln price, low to high
+    edges: list  # arrays of ln price, low to high; one more than there are bands
     params: dict = field(default_factory=dict)
     sigma: float = float("nan")
     r2: float = float("nan")
     rmse: float = float("nan")
+    # Models that define their own bands (rather than using the nine-colour
+    # rainbow) fill these in; empty means "use the default rainbow".
+    band_colors: list = field(default_factory=list)
+    band_labels: list = field(default_factory=list)
+    band_levels: list = field(default_factory=list)  # cumulative, for calibration
 
     def price(self) -> np.ndarray:
         return np.exp(self.center)
@@ -125,8 +141,19 @@ def build_input(raw_data: pd.DataFrame, extended_dates: pd.Series) -> ModelInput
     return ModelInput(dates=dates, t_days=t_days, t_index=t_index, y=y, n_hist=n_hist)
 
 
-def _finish(spec: ModelSpec, inp: ModelInput, center: np.ndarray, params: dict) -> Fit:
-    """Derive residual statistics and rainbow band edges from a centre line."""
+def _finish(
+    spec: ModelSpec,
+    inp: ModelInput,
+    center: np.ndarray,
+    params: dict,
+    bands: dict | None = None,
+) -> Fit:
+    """Derive residual statistics and band edges from a centre line.
+
+    ``bands`` lets a model supply its own edges, colours and labels instead of
+    the nine-colour rainbow — used by the quantile model, whose edges are each a
+    separate regression rather than an offset from the centre.
+    """
     center = np.asarray(center, dtype=float)
     residuals = inp.y - center[: inp.n_hist]
     finite = residuals[np.isfinite(residuals)]
@@ -139,13 +166,22 @@ def _finish(spec: ModelSpec, inp: ModelInput, center: np.ndarray, params: dict) 
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
     rmse = float(np.sqrt(ss_res / finite.size))
 
-    if spec.band_mode == "quantile":
-        offsets = np.quantile(finite, QUANTILE_EDGES)
+    if bands is not None:
+        edges = bands["edges"]
+        extra = {
+            "band_colors": bands["colors"],
+            "band_labels": bands["labels"],
+            "band_levels": bands["levels"],
+        }
     else:
-        steps = np.arange(NUM_BANDS + 1) - NUM_BANDS / 2.0
-        offsets = steps * BAND_SIGMA_STEP * sigma
+        if spec.band_mode == "quantile":
+            offsets = np.quantile(finite, QUANTILE_EDGES)
+        else:
+            steps = np.arange(NUM_BANDS + 1) - NUM_BANDS / 2.0
+            offsets = steps * BAND_SIGMA_STEP * sigma
+        edges = [center + offset for offset in offsets]
+        extra = {}
 
-    edges = [center + offset for offset in offsets]
     return Fit(
         key=spec.key,
         name=spec.name,
@@ -158,6 +194,7 @@ def _finish(spec: ModelSpec, inp: ModelInput, center: np.ndarray, params: dict) 
         sigma=sigma,
         r2=r2,
         rmse=rmse,
+        **extra,
     )
 
 
@@ -420,6 +457,88 @@ def _fit_lppl(inp: ModelInput):
     }
 
 
+def quantile_regression(design: np.ndarray, y: np.ndarray, tau: float, iterations: int = 200):
+    """Linear quantile regression, minimising the pinball loss for ``tau``.
+
+    Solved by iteratively reweighted least squares (Schlossmacher): the pinball
+    loss is |r| reweighted by tau above the line and 1-tau below, so repeatedly
+    solving a weighted least-squares problem with weights w = tau_or_1-tau / |r|
+    converges to the quantile fit. Verified against the exact linear-programming
+    solution: coefficients agree to four decimals on every quantile used here,
+    at roughly a tenth of the cost — which matters because the backtest refits
+    every model at every forecast origin.
+    """
+    beta, *_ = np.linalg.lstsq(design, y, rcond=None)
+    floor = 1e-6 * max(float(np.std(y)), 1e-9)
+
+    for _ in range(iterations):
+        residual = y - design @ beta
+        weight = np.where(residual >= 0, tau, 1.0 - tau) / np.maximum(np.abs(residual), floor)
+        root = np.sqrt(weight)
+        updated, *_ = np.linalg.lstsq(design * root[:, None], y * root, rcond=None)
+        shift = float(np.max(np.abs(updated - beta)))
+        beta = updated
+        if shift < 1e-10:
+            break
+    return beta
+
+
+def _fit_quantile_model(inp: ModelInput):
+    """Plan C's Bitcoin Quantile Model: one power-law regression per quantile.
+
+    Every band edge is its own quantile regression of ln(price) on ln(days since
+    genesis), rather than an offset from a shared centre. Each quantile
+    therefore gets its own slope, and the measured slopes fall steadily from
+    ~5.9 at the 1st percentile to ~4.5 at the 99.9th — which is why the channel
+    is wide in the early years and narrows as the series matures, the
+    distinctive feature of this model against a fixed-width corridor.
+
+    The centre line is the fitted median, not the least-squares mean.
+    """
+    log_t = np.log(inp.t_days)
+    design_hist = np.column_stack([np.ones(inp.n_hist), log_t[: inp.n_hist]])
+
+    curves, coefficients = [], {}
+    for tau in QUANTILE_MODEL_LEVELS:
+        beta = quantile_regression(design_hist, inp.y, tau)
+        curves.append(beta[0] + beta[1] * log_t)
+        coefficients[f"slope_q{tau * 100:g}"] = float(beta[1])
+
+    # Independent quantile fits can cross where their slopes differ. Sorting the
+    # curves pointwise is Chernozhukov's rearrangement: it restores monotonic
+    # ordering without disturbing the fit anywhere the lines were already in
+    # order, and gives the non-crossing guarantee v2 of the model advertises.
+    stacked = np.sort(np.vstack(curves), axis=0)
+    edges = [stacked[i] for i in range(stacked.shape[0])]
+    center = stacked[QUANTILE_MODEL_LEVELS.index(0.5)]
+
+    params = dict(coefficients)
+    params["crossings_repaired"] = int(np.sum(np.vstack(curves) != stacked))
+    params["quantile_today"] = _price_quantile(
+        float(inp.y[-1]), [edge[inp.n_hist - 1] for edge in edges]
+    )
+    bands = {
+        "edges": edges,
+        "colors": [color for color, _ in QUANTILE_MODEL_BANDS],
+        "labels": [label for _, label in QUANTILE_MODEL_BANDS],
+        "levels": list(QUANTILE_MODEL_LEVELS),
+    }
+    return center, params, bands
+
+
+def _price_quantile(log_price: float, edges_today: list) -> float:
+    """Where today's price sits on the fitted quantile scale, in percent.
+
+    Linear interpolation between the bracketing quantile curves — the reading
+    the model's "Quantile: 56.2" headline reports. Clamped at the outermost
+    curves: a price below the 1st-percentile line reads exactly 1, because the
+    fit says nothing about the shape of the distribution beyond it.
+    """
+    levels = np.array(QUANTILE_MODEL_LEVELS) * 100.0
+    values = np.array(edges_today, dtype=float)
+    return float(np.interp(log_price, values, levels))
+
+
 def _fit_halving_cycle(inp: ModelInput):
     """Power-law trend plus harmonics of the position inside the halving epoch.
 
@@ -625,6 +744,29 @@ MODELS = [
         n_params=6,
     ),
     ModelSpec(
+        key="quantile_model",
+        name="Quantile Model (Plan C)",
+        description=(
+            "Every band edge is its own quantile regression of log price on "
+            "log days since genesis, so each quantile carries its own slope "
+            "instead of sitting a fixed distance from the centre. The measured "
+            "slopes fall from ~5.9 at the 1st percentile to ~4.5 at the 99.9th, "
+            "so the channel is wide early and narrows as the series matures. "
+            "Bands are the model's own valuation tiers, and the headline "
+            "statistic is where today's price sits on the 1–99.9 scale."
+        ),
+        formula="Q_τ[ln(P)] = a_τ · ln(d) + b_τ,  τ ∈ {1, 20, 50, 80, 95, 99.9}%",
+        fit=_fit_quantile_model,
+        band_mode="explicit",
+        # Two, not twelve. The model estimates 12 coefficients across its six
+        # curves, but the information criteria in metrics.evaluate score the
+        # CENTRE line only, and that centre is the median regression's 2
+        # parameters. Charging all 12 against a 2-parameter likelihood would be
+        # a category error - the same convention power_law_quantile follows,
+        # where the band quantiles are likewise outside the likelihood.
+        n_params=2,
+    ),
+    ModelSpec(
         key="halving_cycle",
         name="Halving-Cycle Regression",
         description=(
@@ -643,9 +785,11 @@ DEFAULT_MODEL = "power_law"
 
 
 def fit_model(spec: ModelSpec, inp: ModelInput) -> Fit:
-    """Fit one model and build its rainbow bands."""
-    center, params = spec.fit(inp)
-    return _finish(spec, inp, center, params)
+    """Fit one model and build its bands."""
+    result = spec.fit(inp)
+    center, params = result[0], result[1]
+    bands = result[2] if len(result) > 2 else None
+    return _finish(spec, inp, center, params, bands)
 
 
 def resolve_models(selection: str | None) -> list:

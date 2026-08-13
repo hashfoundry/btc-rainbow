@@ -115,7 +115,9 @@ def build_charts(
         # The figure is embedded as a fragment rather than written straight out,
         # so the comparison tables can sit underneath it on the same page.
         plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", config=PLOTLY_CONFIG)
-        page = report.chart_page(plot_div, spec, results, n_eff, len(raw_data))
+        page = report.chart_page(
+            plot_div, spec, results, n_eff, len(raw_data), heading=plot.chart_heading(fit)
+        )
 
         (out / f"{spec.key}.html").write_text(page, encoding="utf-8")
         if spec.key == LEGACY_CHART_MODEL:
@@ -332,7 +334,7 @@ def render_index(
         fair = float(fit.price()[n_hist - 1])
         ratio = price / fair
         band = current_band(fit, price, n_hist)
-        color = band_color(band)
+        color = band_color(band, fit)
         m = result["metrics"]
         b = result["backtest"]
 
@@ -432,8 +434,10 @@ def render_index(
     )
 
 
-def band_color(band_label: str) -> str:
-    for color, label in BAND_COLORS:
+def band_color(band_label: str, fit=None) -> str:
+    """Swatch colour for a band label, from the model's own tiers if it has any."""
+    palette = plot.band_spec(fit) if fit is not None else BAND_COLORS
+    for color, label in palette:
         if label == band_label:
             return color
     return "#9a9a9a"

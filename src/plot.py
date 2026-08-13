@@ -69,9 +69,24 @@ def create_plot(
     return fig
 
 
+def chart_heading(fit) -> str:
+    """Chart title. A model with its own valuation tiers is not a rainbow."""
+    if fit.band_colors:
+        return f"Bitcoin {fit.name}"
+    return f"Bitcoin Rainbow Chart — {fit.name}"
+
+
+def band_spec(fit):
+    """(colour, label) per band — the model's own tiers, or the default rainbow."""
+    if fit.band_colors and fit.band_labels:
+        return list(zip(fit.band_colors, fit.band_labels))
+    return BAND_COLORS
+
+
 def plot_rainbow(fig, extended_dates, fit):
-    """Fill the nine valuation bands between consecutive model edges."""
+    """Fill each valuation band between consecutive model edges."""
     edges = fit.band_prices()
+    bands = band_spec(fit)
 
     # Baseline for the first `tonexty` fill; never hovered.
     fig.add_trace(
@@ -85,7 +100,7 @@ def plot_rainbow(fig, extended_dates, fit):
         )
     )
 
-    for i, (color, label) in enumerate(BAND_COLORS):
+    for i, (color, label) in enumerate(bands):
         lower, upper = edges[i], edges[i + 1]
         fig.add_trace(
             go.Scatter(
@@ -224,7 +239,7 @@ def configure_plot(fig, raw_data, fit, extended_dates, months, stats=None, backt
         hoverlabel=dict(font=dict(size=12)),
         title=dict(
             text=(
-                f"<b>Bitcoin Rainbow Chart — {fit.name}</b>"
+                f"<b>{chart_heading(fit)}</b>"
                 f"<br><span style='font-size:14px;color:{INK_MUTED}'>{fit.formula}</span>"
             ),
             font=dict(color=INK, size=24),
@@ -295,7 +310,16 @@ def fit_footnote(raw_data, fit, stats=None, backtest=None) -> str:
     price = float(raw_data["Value"].iloc[-1])
     fair = float(fit.price()[n_hist - 1])
     band = current_band(fit, price, n_hist)
-    bands = "residual quantiles" if fit.band_mode == "quantile" else "±0.5σ steps"
+    bands = {
+        "explicit": "fitted quantile curves",
+        "quantile": "residual quantiles",
+    }.get(fit.band_mode, "±0.5σ steps")
+
+    # Models that report where price sits on their own quantile scale lead with
+    # that reading, the way the Quantile Model's headline does.
+    position = f"{band}"
+    if "quantile_today" in fit.params:
+        position = f"quantile {fit.params['quantile_today']:.1f} of 1–99.9 — {band}"
 
     lines = [
         (
@@ -304,7 +328,7 @@ def fit_footnote(raw_data, fit, stats=None, backtest=None) -> str:
         ),
         (
             f"{raw_data['Date'].max().date()}: price {price:,.0f} USD, "
-            f"fair value {fair:,.0f} USD ({price / fair:.2f}×) — {band}"
+            f"fair value {fair:,.0f} USD ({price / fair:.2f}×) — {position}"
         ),
         f"fitted: {format_params(fit.params)}",
     ]
@@ -347,10 +371,11 @@ def format_params(params: dict) -> str:
 
 def current_band(fit, price, n_hist) -> str:
     """Label of the band today's price falls in."""
+    bands = band_spec(fit)
     edges = [float(edge[n_hist - 1]) for edge in fit.band_prices()]
     if price < edges[0]:
-        return f"below the rainbow (under {BAND_COLORS[0][1]})"
-    for i, (_, label) in enumerate(BAND_COLORS):
+        return f"below the bands (under {bands[0][1]})"
+    for i, (_, label) in enumerate(bands):
         if price < edges[i + 1]:
             return label
-    return f"above the rainbow (over {BAND_COLORS[-1][1]})"
+    return f"above the bands (over {bands[-1][1]})"

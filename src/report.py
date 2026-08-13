@@ -268,8 +268,9 @@ def stats_section(results, n_eff: float, n_hist: int, highlight_key=None) -> str
     return "\n".join(blocks)
 
 
-def chart_page(plot_div: str, spec, results, n_eff: float, n_hist: int) -> str:
+def chart_page(plot_div: str, spec, results, n_eff: float, n_hist: int, heading=None) -> str:
     """A single model's chart, followed by the all-model comparison tables."""
+    heading = heading or f"Bitcoin Rainbow Chart — {spec.name}"
     content = f"""  <a class="backlink" href="index.html">← all models</a>
   <h1>{html.escape(spec.name)}</h1>
   <p class="sub">{html.escape(spec.description)}</p>
@@ -281,6 +282,4 @@ def chart_page(plot_div: str, spec, results, n_eff: float, n_hist: int) -> str:
     <p>A high R² means a model tracks history closely, not that it forecasts well — the most
     flexible curves overfit the past most eagerly. Nothing here is financial advice.</p>
   </footer>"""
-    return PAGE.format(
-        title=f"Bitcoin Rainbow Chart — {html.escape(spec.name)}", css=CSS, content=content
-    )
+    return PAGE.format(title=html.escape(heading), css=CSS, content=content)

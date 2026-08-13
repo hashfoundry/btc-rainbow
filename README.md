@@ -38,6 +38,7 @@ Rerun `docker compose up` any time to pull the latest daily closes and rebuild.
 | `s2f` | Stock-to-Flow | Scarcity model; staircase rainbow |
 | `lppl` | Log-Periodic Power Law | Sornette bubble signature |
 | `halving_cycle` | Halving-Cycle Regression | Best fit; rainbow undulates with the cycle |
+| `quantile_model` | Quantile Model (Plan C) | One regression per quantile; channel narrows over time |
 
 The mathematics, fitting method and failure modes of each are documented in
 [bitcoin_rainbow_chart_regression_models.md](bitcoin_rainbow_chart_regression_models.md).

@@ -231,6 +231,12 @@ def _nominal_occupancy(fit) -> np.ndarray:
     """Share of observations each band should hold if the model is calibrated."""
     from models import BAND_SIGMA_STEP, NUM_BANDS, QUANTILE_EDGES
 
+    # Models carrying their own quantile levels state their nominal shares
+    # directly - this is what the quantile model is fitted to deliver, so its
+    # calibration error is a direct test of the fit rather than of normality.
+    if fit.band_levels:
+        return np.diff(np.asarray(fit.band_levels, dtype=float))
+
     if fit.band_mode == "quantile":
         # Quantile bands hold equal shares by construction.
         return np.diff(QUANTILE_EDGES)

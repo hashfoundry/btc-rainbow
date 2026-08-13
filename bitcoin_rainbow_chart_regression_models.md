@@ -22,6 +22,8 @@ comparable:
   so the nine-band rainbow spans ±2.25σ around the trend.
 - **Quantile bands** — band edges sit at empirical residual quantiles (1st to
   99th percentile), so each band holds a known share of history.
+- **Explicit bands** — the model fits each edge itself rather than offsetting a
+  centre line, and supplies its own tier names. Only `quantile_model` does this.
 
 Time is measured as **days since the genesis block** (2009-01-03) unless stated
 otherwise.
@@ -47,7 +49,7 @@ the models in **exactly** the R² order with no inversions, and puts the
 against a penalty difference of 8. That is not a preference, it is an artefact.
 
 **Adjusted R² does not fix it either.** The largest correction across all
-thirteen models is 8.3 × 10⁻⁵, against an R² spread of 0.134 — three orders of
+fourteen models is 8.3 × 10⁻⁵, against an R² spread of 0.134 — three orders of
 magnitude too small to change any ranking. It is reported anyway, because it is
 the usual suggested remedy and watching it do nothing is informative.
 
@@ -97,24 +99,25 @@ on data up to the origin, then scored on the price 365 days later.
 
 ## Model reference
 
-Measured on daily closes through 2026-08-06 (5,834 observations, n_eff ≈ 22.4),
+Measured on daily closes through 2026-08-12 (5,840 observations, n_eff ≈ 22.4),
 sorted by ΔAICc. These shift as new data arrives.
 
 | Key | Model | k | R² | σ | ΔAICc | ΔBIC | OOS RMSE |
 |---|---|---|---|---|---|---|---|
 | `power_law` | Power Law Corridor | 2 | 0.9598 | 0.694 | **0.00** | 0.00 | 0.718 |
 | `power_law_quantile` | Power Law – Quantile Corridor | 2 | 0.9598 | 0.694 | **0.00** | 0.00 | 0.718 |
-| `time_offset_log` | Time-Adjusted Logarithmic Regression | 3 | 0.9612 | 0.681 | 2.19 | 2.31 | 0.817 |
-| `log_time` | Logarithmic Regression (original) | 3 | 0.9612 | 0.681 | 2.19 | 2.31 | 0.817 |
-| `stretched_log` | Modified Power Law (Stretched Log) | 3 | 0.9609 | 0.684 | 2.33 | 2.45 | 0.763 |
-| `halving_cycle` | Halving-Cycle Regression | 6 | **0.9732** | 0.566 | 5.33 | 3.31 | 0.644 |
-| `power_law_robust` | Power Law – Robust (Theil–Sen) | 2 | 0.9486 | 0.695 | 5.51 | 5.51 | 0.618 |
-| `gompertz` | Gompertz Growth | 4 | 0.9559 | 0.727 | 8.44 | 8.31 | 0.973 |
-| `logistic` | Logistic Growth (S-Curve) | 4 | 0.9551 | 0.733 | 8.83 | 8.70 | 0.973 |
-| `lppl` | Log-Periodic Power Law | 6 | 0.9646 | 0.651 | 11.60 | 9.59 | **0.587** |
-| `s2f` | Stock-to-Flow | 2 | 0.9321 | 0.901 | 11.74 | 11.74 | 1.048 |
-| `log_linear` | Log-Linear (Exponential Trend) | 2 | 0.8697 | 1.249 | 26.37 | 26.37 | 1.910 |
-| `hyperbolic` | Hyperbolic (Finite-Time Singularity) | 3 | 0.8393 | 1.387 | 34.06 | 34.18 | 2.246 |
+| `quantile_model` | Quantile Model (Plan C) | 2 | 0.9558 | 0.704 | 2.10 | 2.10 | 0.813 |
+| `time_offset_log` | Time-Adjusted Logarithmic Regression | 3 | 0.9612 | 0.681 | 2.18 | 2.30 | 0.817 |
+| `log_time` | Logarithmic Regression (original) | 3 | 0.9612 | 0.681 | 2.18 | 2.30 | 0.817 |
+| `stretched_log` | Modified Power Law (Stretched Log) | 3 | 0.9610 | 0.683 | 2.32 | 2.44 | 0.763 |
+| `halving_cycle` | Halving-Cycle Regression | 6 | **0.9732** | 0.566 | 5.31 | 3.30 | 0.644 |
+| `power_law_robust` | Power Law – Robust (Theil–Sen) | 2 | 0.9487 | 0.695 | 5.46 | 5.46 | 0.618 |
+| `gompertz` | Gompertz Growth | 4 | 0.9559 | 0.726 | 8.41 | 8.29 | 0.973 |
+| `logistic` | Logistic Growth (S-Curve) | 4 | 0.9551 | 0.733 | 8.80 | 8.68 | 0.973 |
+| `lppl` | Log-Periodic Power Law | 6 | 0.9646 | 0.651 | 11.58 | 9.58 | **0.587** |
+| `s2f` | Stock-to-Flow | 2 | 0.9321 | 0.901 | 11.76 | 11.76 | 1.048 |
+| `log_linear` | Log-Linear (Exponential Trend) | 2 | 0.8694 | 1.250 | 26.43 | 26.43 | 1.910 |
+| `hyperbolic` | Hyperbolic (Finite-Time Singularity) | 3 | 0.8390 | 1.388 | 34.13 | 34.25 | 2.246 |
 
 Three things are worth reading off this table.
 
@@ -123,7 +126,7 @@ R² scores and rank 6th and 10th on ΔAICc. Their extra parameters do not pay fo
 themselves.
 
 **But "more parameters ⇒ better R²" is a tendency, not a law.** Spearman(k, R²)
-is only +0.55 (p = 0.051), and in 15 of 60 model pairs the model with *more*
+is only +0.54 (p = 0.047), and in 17 of 68 model pairs the model with *more*
 parameters scored *worse*. These models are mostly not nested, so a larger k can
 simply buy a worse functional form — `logistic` and `gompertz` (k = 4) both lose
 to the k = 2 power law, and `hyperbolic` (k = 3) loses to `log_linear` (k = 2).
@@ -135,7 +138,7 @@ the credible models and the *best* out-of-sample RMSE. Meanwhile
 second-best out-of-sample error — robust estimation gives up in-sample fit
 precisely to generalise better.
 
-Treat the out-of-sample column as indicative rather than a verdict: **9 of 12
+Treat the out-of-sample column as indicative rather than a verdict: **10 of 13
 models are statistically indistinguishable from the top one** under a moving-block
 bootstrap, and the ordering moves with the evaluation window. Starting the
 backtest in 2013 instead of 2015 drops `halving_cycle` out of the top five;
@@ -350,6 +353,56 @@ The obvious caveat: it is fitted on only four halving epochs, so it is the most
 overfit model here. It assumes the cycle keeps its shape and amplitude as the
 issuance change becomes economically negligible.
 
+### 14. Quantile Model — `quantile_model`
+
+```
+Q_τ[ln(P)] = a_τ · ln(d) + b_τ,   τ ∈ {1, 20, 50, 80, 95, 99.9}%
+```
+
+Plan C's Bitcoin Quantile Model. Every band edge is its **own quantile
+regression** of log price on log days since genesis, fitted by minimising the
+pinball loss — not an offset from a shared centre line. Each quantile therefore
+gets its own slope, and the centre is the fitted *median* rather than the
+least-squares mean.
+
+That single change is what distinguishes it from the power-law corridor, and the
+consequence is measurable. Fitted slopes fall monotonically with the quantile:
+
+| τ | 1% | 20% | 50% | 80% | 95% | 99.9% |
+|---|---|---|---|---|---|---|
+| slope | 5.944 | 5.830 | 5.805 | 5.034 | 4.858 | 4.528 |
+
+Lower quantiles rise faster than upper ones, so the channel **converges**: from
+26× wide (99.9th ÷ 1st percentile) in 2015 to 5.7× today. A fixed-width corridor
+cannot express that, and it matches the published chart, where the early years
+are a broad fan and the projection is a narrow band.
+
+Bands use the model's own valuation tiers rather than the rainbow — Deep Value
+(1–20), Discounted (20–50), Premium (50–80), Speculative (80–95), Historic Peaks
+(95–99.9) — and the headline statistic is where today's price falls on the
+1–99.9 scale, interpolated between the bracketing curves.
+
+**Verification.** Quantile regression is solved by iteratively reweighted least
+squares; the coefficients agree with the exact linear-programming solution to
+four decimals on every quantile, at roughly a tenth of the cost. The fit is
+self-checking: observed band occupancy comes out at 19.0 / 30.0 / 30.0 / 15.0 /
+4.9 percent against nominal 19 / 30 / 30 / 15 / 4.9, and 1.03% of history falls
+below the 1st-percentile line.
+
+**Non-crossing.** Independently fitted quantile curves with different slopes can
+cross. Version 2 of the model advertises that they cannot; here that is enforced
+by pointwise rearrangement (sorting the curves at each date), the standard
+Chernozhukov remedy, which leaves the fit untouched wherever it was already
+ordered. On the current data no repair is needed — `crossings_repaired = 0`.
+
+**What is not reproduced.** The published v2 also uses a "stretched-exponential
+decay" parameterisation of how the quantile spread narrows, which is not
+documented in public detail. This implementation uses plain linear-in-log-time
+quantile regression, which produces convergence from the data rather than
+imposing a decay function. Levels and tier names follow the v2 chart; the
+[Substack write-up](https://jowat14.substack.com/p/modellin-predictin-and-pricin)
+describes v1 with a different set (0.1, 10, 25, 50, 75, 90, 99, 99.9).
+
 ## Models considered and not implemented
 
 **Metcalfe's Law / generalised Metcalfe** (`P ∝ U^β` for network size `U`)
@@ -412,3 +465,6 @@ None of this is financial advice.
 - [A Bitcoin price prediction model assuming oscillatory growth and lengthening cycles — Cogent Economics & Finance](https://www.tandfonline.com/doi/full/10.1080/23322039.2022.2087287)
 - [Bitcoin Stock-to-Flow (S2F) Model Explained — CoinGecko](https://www.coingecko.com/learn/bitcoin-stock-to-flow-model-explained)
 - [lppls — reference implementation of the LPPLS model](https://github.com/Boulder-Investment-Technologies/lppls)
+- [Modellin', Predictin' and Pricin' — the Bitcoin Quantile Model explained](https://jowat14.substack.com/p/modellin-predictin-and-pricin)
+- [Plan C — Quantile Model v2 development timeline](https://x.com/TheRealPlanC/status/1979998687695958492)
+- [Bitcoin Power Law price prediction using quantile regression](https://researchbitcoin.net/bitcoin-power-law-price-prediction-using-quantile-regression/)
